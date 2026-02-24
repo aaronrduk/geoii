@@ -57,7 +57,49 @@ class DiceLoss(nn.Module):
         return 1.0 - dice
 
 
-# ── Focal Loss ────────────────────────────────────────────────────────────────
+# ── Binary Focal Loss ─────────────────────────────────────────────────────────
+
+
+class BinaryFocalWithLogitsLoss(nn.Module):
+    """
+    Binary Focal Loss for highly unbalanced segmentation tasks.
+    Used for 'waterbody_line', 'utility_line', etc. where positive pixels
+    are extremely sparse.
+
+    Formula: - \alpha (1 - p)^\gamma \log(p)
+    """
+
+    def __init__(self, alpha: float = 0.25, gamma: float = 2.0):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        # Clamp logits — prevents sigmoid overflow in fp16
+        pred = torch.clamp(pred.float(), -100, 100)
+
+        # Squeeze channel dim if present
+        if pred.dim() == 4 and pred.shape[1] == 1:
+            pred = pred.squeeze(1)
+
+        bce_loss = F.binary_cross_entropy_with_logits(
+            pred, target.float(), reduction="none"
+        )
+
+        pt = torch.exp(
+            -bce_loss
+        )  # pt is the predicted probability for the actual class
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * bce_loss
+
+        loss = focal_loss.mean()
+
+        if not torch.isfinite(loss):
+            return torch.zeros(1, device=pred.device, dtype=torch.float32).sum()
+
+        return loss
+
+
+# ── Multi-Class Focal Loss ────────────────────────────────────────────────────
 
 
 class FocalLoss(nn.Module):
@@ -86,14 +128,17 @@ class FocalLoss(nn.Module):
 
 
 class CombinedSegmentationLoss(nn.Module):
-    """Combined Dice + BCE loss for binary segmentation."""
+    """Combined Dice + Binary Focal loss for binary segmentation."""
 
     def __init__(self, dice_weight: float = 0.5, bce_weight: float = 0.5):
         super().__init__()
         self.dice_weight = dice_weight
         self.bce_weight = bce_weight
         self.dice_loss = DiceLoss()
-        self.bce_loss = nn.BCEWithLogitsLoss()
+
+        # Adopted from .ipynb analysis: use Focal Loss to handle extreme class imbalance
+        # for sparse features instead of regular BCE.
+        self.bce_loss = BinaryFocalWithLogitsLoss(alpha=0.25, gamma=2.0)
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         # Clamp logits — prevents sigmoid overflow in fp16
