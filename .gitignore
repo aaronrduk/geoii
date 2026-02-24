@@ -1,0 +1,19 @@
+
+# System generated
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data
+dataset/
+logs/
+checkpoints/
+saved_models/
+*.png
+
+# Temporary Scripts
+create_small_sample.py
+modify_notebook.py
+
+# Others
+.DS_Store
