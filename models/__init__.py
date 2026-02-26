@@ -2,7 +2,7 @@
 Neural network models for SVAMITVA feature extraction.
 """
 
-from .feature_extractor import FeatureExtractorModel
+from .feature_extractor import FeatureExtractor
 from .building_head import BuildingHead
 from .road_head import RoadHead
 from .road_centerline_head import RoadCenterlineHead
@@ -14,7 +14,7 @@ from .bridge_head import BridgeHead
 from .railway_head import RailwayHead
 
 __all__ = [
-    "FeatureExtractorModel",
+    "FeatureExtractor",
     "BuildingHead",
     "RoadHead",
     "RoadCenterlineHead",

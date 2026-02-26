@@ -18,7 +18,7 @@ import torch.nn as nn
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parent))
-from models.feature_extractor import FeatureExtractorModel
+from models.feature_extractor import FeatureExtractor
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Page config
@@ -100,9 +100,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 @st.cache_resource
 def load_model(ckpt_path_str: str):
-    model = FeatureExtractorModel(
-        backbone="resnet50", pretrained=False, num_roof_classes=5
-    )
+    model = FeatureExtractor(backbone="resnet50", pretrained=False, num_roof_classes=5)
     ckpt_path = Path(ckpt_path_str) if ckpt_path_str else None
     if ckpt_path and ckpt_path.exists():
         state_dict = torch.load(ckpt_path, map_location="cpu", weights_only=False)

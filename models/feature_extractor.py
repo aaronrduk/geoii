@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
-from typing import Dict, Optional
+from typing import Dict
 
 from .building_head import BuildingHead
 from .road_head import RoadHead
@@ -22,7 +22,7 @@ from .bridge_head import BridgeHead
 from .railway_head import RailwayHead
 
 
-class FeatureExtractorModel(nn.Module):
+class FeatureExtractor(nn.Module):
     """
     Multi-task feature extraction model for SVAMITVA drone imagery.
 
@@ -54,7 +54,7 @@ class FeatureExtractorModel(nn.Module):
             pretrained (bool): Whether to use ImageNet pretrained weights
             num_roof_classes (int): Number of roof type classes (incl. background)
         """
-        super(FeatureExtractorModel, self).__init__()
+        super(FeatureExtractor, self).__init__()
 
         self.backbone_name = backbone
         self.backbone, self.feature_channels = self._create_backbone(
@@ -270,7 +270,7 @@ class FeatureExtractorModel(nn.Module):
 
 # ── Quick self-test ────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    model = FeatureExtractorModel(backbone="resnet50", pretrained=False)
+    model = FeatureExtractor(backbone="resnet50", pretrained=False)
     print(f"Backbone: {model.backbone_name}")
     print(f"Total parameters: {model.get_num_parameters():,}")
 
