@@ -52,7 +52,13 @@ jupyter nbconvert SVAMITVA_Local_Train.ipynb --execute
 ```
 *Configured for `mps` devices to train a lighter ResNet34 strictly on MAP1.*
 
-### 3. Streamlit Interface
+### 3. Local Windows Prototype
+```bash
+jupyter nbconvert SVAMITVA_Windows_Train.ipynb --execute
+```
+*Configured for NVIDIA `cuda` or CPU to train a lighter ResNet34 strictly on MAP1, using `C:\\DATA` as its input.*
+
+### 4. Streamlit Interface
 ```bash
 streamlit run app.py
 ```

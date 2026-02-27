@@ -18,7 +18,7 @@ Since an Orthophoto is generally rotated over an arbitrary bounding box, loading
 
 ## 2. Model Architecture
 ### Backbone & Predictor
-The architecture utilizes a unified ResNet backbone (`ResNet34` locally or `ResNet50` on DGX) mapped into a PyTorch Feature Pyramid Network (`FPN`). This configuration detects multiscale features (like massive factories spanning entire tiles down to ultra-narrow utility centerlines) hierarchically.
+The architecture utilizes a unified ResNet backbone (`ResNet34` locally on Mac/Windows, or `ResNet50` on DGX) mapped into a PyTorch Feature Pyramid Network (`FPN`). This configuration detects multiscale features (like massive factories spanning entire tiles down to ultra-narrow utility centerlines) hierarchically.
 
 ### Independent Task Heads
 For every 10 features, there is a dedicated localized "Head" branch connected to the FPN (`models/building_head.py`, `models/road_head.py`, etc.). 
