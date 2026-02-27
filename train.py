@@ -20,9 +20,6 @@ import random
 import time
 from pathlib import Path
 
-# Set before any CUDA context is created
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-
 import numpy as np
 import torch
 import torch.nn as nn
@@ -36,6 +33,9 @@ from training.config import TrainingConfig, get_config_from_args
 from training.metrics import MetricTracker
 from utils.checkpoint import CheckpointManager, resume_training
 from utils.logging_config import setup_logging
+
+# Set before any CUDA context is created
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 logger = setup_logging()
 
@@ -188,14 +188,24 @@ def validate(
 def train(config: TrainingConfig):
     set_seed(config.seed, deterministic=True)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    amp_device = "cuda" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        amp_device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+        amp_device = "mps"
+    else:
+        device = torch.device("cpu")
+        amp_device = "cpu"
+
     logger.info(f"Device: {device}")
 
-    if torch.cuda.is_available():
+    if device.type == "cuda":
         for i in range(torch.cuda.device_count()):
             g = torch.cuda.get_device_properties(i)
             logger.info(f"  GPU {i}: {g.name}  ({g.total_memory/1e9:.1f} GB)")
+    elif device.type == "mps":
+        logger.info("  Using Apple Silicon GPU (MPS)")
 
     # ── Data ─────────────────────────────────────────────────────────────────
     train_loader, val_loader = create_dataloaders(

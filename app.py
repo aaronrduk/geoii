@@ -100,7 +100,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 @st.cache_resource
 def load_model(ckpt_path_str: str):
-    model = FeatureExtractor(backbone="resnet50", pretrained=False, num_roof_classes=5)
+    model = FeatureExtractor(backbone="resnet34", pretrained=False, num_roof_classes=5)
     ckpt_path = Path(ckpt_path_str) if ckpt_path_str else None
     if ckpt_path and ckpt_path.exists():
         state_dict = torch.load(ckpt_path, map_location="cpu", weights_only=False)
@@ -261,12 +261,12 @@ def mask_to_shp_zip(
         return None
 
     # Rasterio vectorise
-    transform = geo_meta["transform"] if geo_meta else None
-    shapes = [
-        (shape(geom), int(val))
-        for geom, val in rasterio.features.shapes(binary, transform=transform)
-        if int(val) == 1
-    ]
+    if geo_meta and geo_meta.get("transform") is not None:
+        shapes_iter = rasterio.features.shapes(binary, transform=geo_meta["transform"])
+    else:
+        shapes_iter = rasterio.features.shapes(binary)
+
+    shapes = [(shape(geom), int(val)) for geom, val in shapes_iter if int(val) == 1]
     shapes = [(g, v) for g, v in shapes if g.is_valid and not g.is_empty]
     if not shapes:
         return None

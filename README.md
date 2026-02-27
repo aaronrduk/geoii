@@ -1,36 +1,33 @@
 # SVAMITVA Feature Extraction Model
 
-Multi-task deep learning model for extracting geospatial features from
-drone orthophotos, as part of the SVAMITVA land survey programme.
+A highly optimized Multi-Task Deep Learning model designed to rapidly extract 10 distinct geospatial features from large-scale drone Orthophotos (GeoTIFFs). Developed for the SVAMITVA land survey programme.
+
+## Features
+- **10 Core Feature Masks**: Extracts Buildings, Roads, Waterbodies, Utilities, Bridges, and Railways representing various geometries (Polygons, Lines, Points). Includes a secondary classifier for Roof Type classification.
+- **Intelligent Preprocessing (K-Means)**: Automatically filters out massive "NoData" background regions using OpenCV K-Means clustering, drastically speeding up data loading and guaranteeing the model only looks at real terrain.
+- **Strict CRS Alignment**: Enforces perfect Coordinate Reference System (CRS) matching between Shapefiles and GeoTIFFs. 
+- **Universal Training**: Dedicated pipelines for both Apple Silicon (Local macOS) and NVIDIA CUDA (DGX Servers) with `NaN` explosion protection, Mixed Precision support, and resume-ready check-pointing.
+- **Interactive Frontend**: A Streamlit application capable of processing huge TIFFs via sliding windows and exporting results back directly into fully-georeferenced Shapefiles (.shp).
 
 ## Dataset Structure (Remote Server)
-
-Each MAP folder sits flat — the TIF and all shapefiles are directly inside
-the MAP folder. No `annotations/` sub-folder is needed.
+Every `MAP` folder sits flat — containing the orthophoto and corresponding shapefiles directly.
 
 ```
-/path/to/maps/
+/path/to/DATA/
     MAP1/
-        village.tif
+        Orthophoto.tif
         Built_Up_Area_typ.shp
         Road.shp
-        Road_Centre_Line.shp
-        Utility.shp
-        Utility_Poly_.shp
-        Water_Body.shp
-        Water_Body_Line.shp
-        Waterbody_Point.shp
-        Bridge.shp
-        Railway.shp
-    MAP2/ ... MAP5/
+        ...
+    MAP2/
 ```
 
-## Model Outputs (10 shapefile tasks)
+## Model Outputs (10 Shapefile Tasks)
 
-| Output key | Shapefile | Geometry |
+| Output key | Target Feature | Geometry |
 |---|---|---|
 | `building_mask` | Built_Up_Area_typ | Polygon |
-| `roof_type` | Built_Up_Area_typ | Polygon (multi-class) |
+| `roof_type` | Built_Up_Area_typ | Polygon (Multi-class) |
 | `road_mask` | Road | Polygon |
 | `road_centerline_mask` | Road_Centre_Line | Line |
 | `waterbody_mask` | Water_Body | Polygon |
@@ -41,49 +38,25 @@ the MAP folder. No `annotations/` sub-folder is needed.
 | `bridge_mask` | Bridge | Polygon/Line |
 | `railway_mask` | Railway | Line |
 
-## Training
+## Running the Pipelines
 
+### 1. DGX Server Training (Sequential Maps)
 ```bash
-python3 train.py \
-  --train_dir /path/to/MAP_parent_folder \
-  --batch_size 8 \
-  --epochs 100 \
-  --backbone resnet50 \
-  --image_size 512
+jupyter nbconvert SVAMITVA_DGX_Train.ipynb --execute
 ```
+*Automatically finds all MAP folders, sets up Mixed Precision, and loops sequentially keeping weights persistent.*
 
-## Project Structure
+### 2. Local Apple Silicon Prototype
+```bash
+jupyter nbconvert SVAMITVA_Local_Train.ipynb --execute
+```
+*Configured for `mps` devices to train a lighter ResNet34 strictly on MAP1.*
 
+### 3. Streamlit Interface
+```bash
+streamlit run app.py
 ```
-svamitva_model/
-├── models/
-│   ├── feature_extractor.py     # Main model (backbone + FPN + all heads)
-│   ├── building_head.py
-│   ├── road_head.py
-│   ├── road_centerline_head.py
-│   ├── waterbody_head.py
-│   ├── waterbody_line_head.py
-│   ├── waterbody_point_head.py
-│   ├── utility_head.py          # UtilityLineHead + UtilityPolyHead
-│   ├── bridge_head.py
-│   ├── railway_head.py
-│   └── losses.py
-├── data/
-│   ├── dataset.py               # MAP*-aware dataset scanner
-│   ├── preprocessing.py         # Orthophoto loader + shapefile rasteriser
-│   └── augmentation.py
-├── training/
-│   ├── config.py
-│   └── metrics.py
-├── utils/
-│   ├── checkpoint.py
-│   └── logging_config.py
-├── app.py                       # Streamlit inference app
-└── train.py
-```
+*Exposes a local web-UI on `localhost:8501`. Upload any image to evaluate the latest `.pt` checkpoint and download Shapefile exports.*
 
-## Requirements
-
-```
-torch torchvision rasterio geopandas shapely albumentations tqdm
-```
+---
+To learn exactly how data is loaded, how annotations are rasterized, and how the model trains, please read `WORKING.md`.
