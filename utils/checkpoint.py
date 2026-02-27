@@ -16,6 +16,18 @@ from typing import Dict, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 
+def save_inference_model(model: torch.nn.Module, path: Path | str):
+    """Save ONLY the model's state_dict to a file for minimal inference size."""
+    model_cpu = getattr(model, "module", model).to("cpu")
+    torch.save(model_cpu.state_dict(), path)
+
+
+def save_half_precision_model(model: torch.nn.Module, path: Path | str):
+    """Save ONLY the model's state_dict in FP16 for even smaller inference size."""
+    model_cpu = getattr(model, "module", model).to("cpu").half()
+    torch.save(model_cpu.state_dict(), path)
+
+
 class CheckpointManager:
     """
     Manager for model checkpoints.
@@ -65,7 +77,12 @@ class CheckpointManager:
         if scaler is not None:
             checkpoint["scaler_state_dict"] = scaler.state_dict()
 
-        checkpoint_path = self.checkpoint_dir / f"checkpoint_epoch_{epoch}.pth"
+        checkpoint_train_path = (
+            self.checkpoint_dir / f"checkpoint_epoch_{epoch}_train.pth"
+        )
+        checkpoint_inf_path = (
+            self.checkpoint_dir / f"checkpoint_epoch_{epoch}_inference.pth"
+        )
 
         try:
             # Atomic save: write to temp file first, then replace
@@ -74,14 +91,18 @@ class CheckpointManager:
             )
             os.close(fd)
             torch.save(checkpoint, temp_path)
-            os.replace(temp_path, checkpoint_path)
+            os.replace(temp_path, checkpoint_train_path)
 
-            logger.info(f"Saved checkpoint to {checkpoint_path}")
+            # Save inference checkpoint natively
+            save_inference_model(model, checkpoint_inf_path)
+
+            logger.info(f"Saved checkpoint to {checkpoint_train_path}")
 
             # Update metadata safely
             checkpoint_info = {
                 "epoch": epoch,
-                "path": str(checkpoint_path.name),  # Store relative path
+                "path": str(checkpoint_train_path.name),  # Store relative path
+                "inf_path": str(checkpoint_inf_path.name),
                 "metrics": metrics,
                 "is_best": is_best,
             }
@@ -93,15 +114,19 @@ class CheckpointManager:
             self.metadata["checkpoints"].append(checkpoint_info)
 
             if is_best:
-                best_path = self.checkpoint_dir / "best_model.pth"
+                best_train_path = self.checkpoint_dir / "best_model_train.pth"
+                best_inf_path = self.checkpoint_dir / "best_model.pth"
                 # Atomic save for best model
                 fd_best, temp_best = tempfile.mkstemp(
                     dir=self.checkpoint_dir, prefix="tmp_best_", suffix=".pth"
                 )
                 os.close(fd_best)
                 torch.save(checkpoint, temp_best)
-                os.replace(temp_best, best_path)
-                logger.info(f"Saved best model to {best_path}")
+                os.replace(temp_best, best_train_path)
+
+                # Save best natively
+                save_inference_model(model, best_inf_path)
+                logger.info(f"Saved best inference model to {best_inf_path}")
 
             self._save_metadata()
             self._cleanup_old_checkpoints()
@@ -227,13 +252,17 @@ class CheckpointManager:
                 final_remove.append(checkpoint)
 
         for checkpoint in final_remove:
-            path = self.checkpoint_dir / checkpoint["path"]
-            if path.exists():
-                try:
-                    path.unlink()
-                    logger.info(f"Removed old checkpoint: {path}")
-                except Exception as e:
-                    logger.warning(f"Failed to remove checkpoint {path}: {e}")
+            paths_to_remove = [self.checkpoint_dir / checkpoint["path"]]
+            if "inf_path" in checkpoint:
+                paths_to_remove.append(self.checkpoint_dir / checkpoint["inf_path"])
+
+            for path in paths_to_remove:
+                if path.exists():
+                    try:
+                        path.unlink()
+                        logger.info(f"Removed old checkpoint: {path}")
+                    except Exception as e:
+                        logger.warning(f"Failed to remove checkpoint {path}: {e}")
 
         self.metadata["checkpoints"] = to_keep
         self._save_metadata()
