@@ -88,7 +88,9 @@ def _find_latest_checkpoint() -> Path | None:
     """Return the most recently modified .pt file in checkpoints/."""
     if not CKPT_DIR.exists():
         return None
-    pts = sorted(CKPT_DIR.rglob("*.pt"), key=lambda p: p.stat().st_mtime, reverse=True)
+    pts = sorted(
+        CKPT_DIR.rglob("*best.pt"), key=lambda p: p.stat().st_mtime, reverse=True
+    )
     return pts[0] if pts else None
 
 
