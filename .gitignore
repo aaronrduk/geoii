@@ -7,7 +7,6 @@ __pycache__/
 # Data
 dataset/
 logs/
-checkpoints/
 saved_models/
 *.png
 
