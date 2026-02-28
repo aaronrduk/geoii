@@ -33,7 +33,7 @@ st.set_page_config(
 
 st.markdown(
     """
-<style>
+<style> 
 .stApp { background: linear-gradient(135deg,#0f0c29,#302b63,#24243e); }
 .main .block-container { padding-top:2rem; }
 h1,h2,h3 { color:#e0e0ff !important; }
