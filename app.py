@@ -11,11 +11,13 @@ import zipfile
 import tempfile
 from pathlib import Path
 
+
 import numpy as np
 import streamlit as st
 import torch
 import torch.nn as nn
 from PIL import Image
+Image.MAX_IMAGE_PIXELS = None  # Disable decompression bomb protection for large images
 
 sys.path.insert(0, str(Path(__file__).parent))
 from models.feature_extractor import FeatureExtractor
