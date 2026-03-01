@@ -462,16 +462,15 @@ def mask_to_shp_zip(
                     # Add roof classification per building polygon
                     if roof_cls_map is not None:
                         try:
-                            from shapely.geometry import mapping as _m
-                            from rasterio.features import rasterize as _ras
-                            import rasterio.transform as _rt
-                            # Determine dominant roof type inside this polygon
-                            minr, minc, maxr, maxc = [
-                                int(v) for v in geom.bounds
-                            ]  # approx pixel bbox
                             centroid = geom.centroid
-                            cy, cx = int(centroid.y), int(centroid.x)
                             rh, rw = roof_cls_map.shape
+                            # Convert geo-coordinates → pixel row/col
+                            if geo_meta and geo_meta.get("transform") is not None:
+                                inv_tf = ~geo_meta["transform"]
+                                px, py = inv_tf * (centroid.x, centroid.y)
+                                cx, cy = int(px), int(py)
+                            else:
+                                cx, cy = int(centroid.x), int(centroid.y)
                             if 0 <= cy < rh and 0 <= cx < rw:
                                 props["roof_type"] = ROOF_TYPES[int(roof_cls_map[cy, cx])]
                             else:

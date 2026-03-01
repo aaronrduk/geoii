@@ -17,15 +17,17 @@ logger = logging.getLogger(__name__)
 
 
 def save_inference_model(model: torch.nn.Module, path: Path | str):
-    """Save ONLY the model's state_dict to a file for minimal inference size."""
-    model_cpu = getattr(model, "module", model).to("cpu")
-    torch.save(model_cpu.state_dict(), path)
+    """Save ONLY the model's state_dict to a file for minimal inference size.
+    Does NOT move the model — safe to call mid-training."""
+    inner = getattr(model, "module", model)
+    torch.save({k: v.cpu() for k, v in inner.state_dict().items()}, path)
 
 
 def save_half_precision_model(model: torch.nn.Module, path: Path | str):
-    """Save ONLY the model's state_dict in FP16 for even smaller inference size."""
-    model_cpu = getattr(model, "module", model).to("cpu").half()
-    torch.save(model_cpu.state_dict(), path)
+    """Save ONLY the model's state_dict in FP16 for even smaller inference size.
+    Does NOT move the model — safe to call mid-training."""
+    inner = getattr(model, "module", model)
+    torch.save({k: v.cpu().half() for k, v in inner.state_dict().items()}, path)
 
 
 class CheckpointManager:
@@ -131,7 +133,7 @@ class CheckpointManager:
             self._save_metadata()
             self._cleanup_old_checkpoints()
 
-            return checkpoint_path
+            return checkpoint_train_path
 
         except Exception as e:
             logger.error(f"Failed to save checkpoint: {e}")
