@@ -41,15 +41,13 @@ class TrainingConfig:
     pin_memory: bool = True
     val_split: float = 0.2
 
-    # ── Loss Weights (original tasks) ─────────────────────────────────────────
+    # ── Loss Weights ──────────────────────────────────────────────────────────
+    # Sparse / rare features upweighted so the model doesn't ignore them
     building_weight: float = 1.0
     roof_weight: float = 0.5
     road_weight: float = 1.0
-    waterbody_weight: float = 1.0
-
-    # ── Loss Weights (new tasks) ──────────────────────────────────────────
-    # Sparse / rare features upweighted so the model doesn't ignore them
     road_centerline_weight: float = 1.2  # thin linear — needs boost
+    waterbody_weight: float = 1.2        # less common than buildings/roads
     waterbody_line_weight: float = 1.2   # thin linear — needs boost
     waterbody_point_weight: float = 1.5  # very sparse → highest weight
     utility_line_weight: float = 1.2     # thin linear

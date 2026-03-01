@@ -242,7 +242,6 @@ def run_inference(image_np: np.ndarray, model: nn.Module, selected: list[str]):
     """
     h, w = image_np.shape[:2]
     stride = TILE_SIZE - OVERLAP
-    all_keys = selected + (["roof_type"] if "building_mask" in selected else [])
 
     accum = {k: np.zeros((h, w), dtype=np.float32) for k in selected}
     counts = np.zeros((h, w), dtype=np.float32)
@@ -302,9 +301,6 @@ def _convert_geometry(geom, target_type: str):
     Polygon  → Point     : centroid
     Multi*   → handled recursively via .geoms
     """
-    from shapely.geometry import (
-        MultiPolygon, MultiLineString, MultiPoint,
-    )
     from shapely.ops import linemerge
 
     gtype = type(geom).__name__
