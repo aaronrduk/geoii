@@ -136,16 +136,36 @@ def _find_latest_checkpoint() -> Path | None:
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+def _detect_backbone(weights: dict) -> str:
+    """Auto-detect backbone from checkpoint weights (resnet34 vs resnet50).
+
+    ResNet-50 layer1.0 has 3 conv layers (bottleneck) while ResNet-34 has 2
+    (basic block).  We check for the presence of a bottleneck key.
+    """
+    for key in weights:
+        if "backbone.layer1.0.conv3.weight" in key:
+            return "resnet50"
+    return "resnet34"
+
+
 @st.cache_resource
 def load_model(ckpt_path_str: str):
-    model = FeatureExtractor(backbone="resnet34", pretrained=False, num_roof_classes=5)
     ckpt_path = Path(ckpt_path_str) if ckpt_path_str else None
+
+    # Try to detect backbone from checkpoint first
+    backbone = "resnet50"  # default for DGX-trained models
     if ckpt_path and ckpt_path.exists():
         state_dict = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-        # Support both raw state_dict and wrapped checkpoint dicts
         weights = (
             state_dict.get("model") or state_dict.get("model_state_dict") or state_dict
         )
+        backbone = _detect_backbone(weights)
+    else:
+        weights = None
+
+    model = FeatureExtractor(backbone=backbone, pretrained=False, num_roof_classes=5)
+
+    if weights is not None:
         model.load_state_dict(weights, strict=False)
         return model.to(DEVICE).eval(), str(ckpt_path.name), True
     return model.to(DEVICE).eval(), "untrained", False
@@ -316,6 +336,7 @@ def mask_to_shp_zip(
     geom_type: str = "Polygon",
     attr_prefix: str = "Feature",
     sub_types: list[str] | None = None,
+    roof_cls_map: np.ndarray | None = None,
 ) -> bytes | None:
     """
     Vectorise a probability mask → shapefile ZIP.
@@ -390,6 +411,10 @@ def mask_to_shp_zip(
         },
     }
 
+    # Add roof_type column for building features
+    if roof_cls_map is not None:
+        schema["properties"]["roof_type"] = "str"
+
     if sub_types is None or len(sub_types) == 0:
         sub_types = [attr_prefix]
 
@@ -426,16 +451,38 @@ def mask_to_shp_zip(
                     else:
                         measure = 0.0
 
+                    props = {
+                        "id": i + 1,
+                        "name": feat_label,
+                        "layer": attr_prefix,
+                        "type": st_name,
+                        "measure": measure,
+                    }
+
+                    # Add roof classification per building polygon
+                    if roof_cls_map is not None:
+                        try:
+                            from shapely.geometry import mapping as _m
+                            from rasterio.features import rasterize as _ras
+                            import rasterio.transform as _rt
+                            # Determine dominant roof type inside this polygon
+                            minr, minc, maxr, maxc = [
+                                int(v) for v in geom.bounds
+                            ]  # approx pixel bbox
+                            centroid = geom.centroid
+                            cy, cx = int(centroid.y), int(centroid.x)
+                            rh, rw = roof_cls_map.shape
+                            if 0 <= cy < rh and 0 <= cx < rw:
+                                props["roof_type"] = ROOF_TYPES[int(roof_cls_map[cy, cx])]
+                            else:
+                                props["roof_type"] = "Unknown"
+                        except Exception:
+                            props["roof_type"] = "Unknown"
+
                     dst.write(
                         {
                             "geometry": mapping(geom),
-                            "properties": {
-                                "id": i + 1,
-                                "name": feat_label,
-                                "layer": attr_prefix,
-                                "type": st_name,
-                                "measure": measure,
-                            },
+                            "properties": props,
                         }
                     )
                 except Exception:
@@ -678,11 +725,17 @@ Supported: <strong>JPG · JPEG · PNG · TIF · TIFF</strong> (including large G
                 all_dl_files[f"{fname}_overlay.png"] = overlay_png
 
                 # Shapefile — correct geometry type + named attributes
+                # For buildings, pass per-pixel roof classification
+                roof_cls = None
+                if key == "building_mask" and "roof_type" in preds:
+                    roof_cls = np.argmax(preds["roof_type"], axis=0).astype(np.uint8)
+
                 shp_bytes = mask_to_shp_zip(
                     mask, threshold, fname, geo_meta,
                     geom_type=geom_type,
                     attr_prefix=attr_prefix,
                     sub_types=sub_types,
+                    roof_cls_map=roof_cls,
                 )
                 if shp_bytes:
                     shp_zips[fname] = shp_bytes

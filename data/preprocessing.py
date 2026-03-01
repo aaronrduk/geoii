@@ -128,13 +128,15 @@ class ShapefileAnnotationParser:
     }
     POINT_TASKS = {"waterbody_point"}
 
-    # Roof type lookup
+    # Roof type lookup — covers common SVAMITVA naming variants
     ROOF_TYPES = {
-        "RCC": 1,
-        "Tiled": 2,
-        "Tin": 3,
-        "Others": 4,
-        "Unknown": 0,
+        "RCC": 1, "rcc": 1, "Rcc": 1, "R.C.C": 1, "R.C.C.": 1,
+        "Tiled": 2, "tiled": 2, "TILED": 2, "Tile": 2, "tile": 2,
+        "Tin": 3, "tin": 3, "TIN": 3, "GI Sheet": 3, "GI": 3,
+        "gi sheet": 3, "Sheet": 3, "AC Sheet": 3, "Asbestos": 3,
+        "Others": 4, "others": 4, "OTHERS": 4, "Other": 4, "other": 4,
+        "Mixed": 4, "Kutcha": 4, "Thatch": 4, "Thatched": 4,
+        "Unknown": 0, "unknown": 0, "": 0, "NA": 0, "None": 0,
     }
 
     def __init__(self):
@@ -256,6 +258,16 @@ class ShapefileAnnotationParser:
             "ROOF_TYPE",
             "RoofType",
             "Roof_Type",
+            "roof",
+            "ROOF",
+            "Sl_Typ",
+            "SL_TYP",
+            "sl_typ",
+            "Roof_typ",
+            "ROOF_TYP",
+            "Rooftype",
+            "Structure",
+            "STRUCTURE",
             "type",
             "Type",
             "TYPE",

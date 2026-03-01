@@ -1,18 +1,36 @@
 
-# System generated
+# Python cache
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg-info/
+dist/
+build/
 
-# Data
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Data & outputs
 dataset/
 logs/
 saved_models/
 *.png
 
-# Temporary Scripts
+# System
+.DS_Store
+Thumbs.db
+.mypy_cache/
+.agent/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary / helper scripts
 create_small_sample.py
 modify_notebook.py
-
-# Others
-.DS_Store
+_fix_*.py
