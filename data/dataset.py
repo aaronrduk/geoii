@@ -98,7 +98,7 @@ ALL_MASK_KEYS = [task for _, _, task in SHAPEFILE_TASKS] + ["roof_type"]
 OPTIONAL_TASKS = {"bridge", "railway"}
 
 TILE_SIZE = 512
-TILE_OVERLAP = 64
+TILE_OVERLAP = 96  # Increased overlap for better boundary coverage
 
 
 class SvamitvaDataset(Dataset):
@@ -162,12 +162,23 @@ class SvamitvaDataset(Dataset):
     # ── Tile calculator ────────────────────────────────────────────────────────
 
     def _compute_tiles(self, tif_path: Path):
-        """Open the TIF, apply K-Means clustering to skip NoData, compute tile windows."""
+        """
+        Open the TIF, apply K-Means clustering to skip NoData, compute tile windows.
+
+        For MAPC sub-maps (already 512×512), this returns a single tile covering
+        the entire image — no tiling overhead needed.
+        """
         try:
             with rasterio.open(tif_path) as src:
                 H, W = src.height, src.width
                 tif_crs = src.crs
                 tif_tf = src.transform
+
+                # ── Fast path for pre-clipped MAPC tiles ─────────────────────
+                # If the image is already ≤ TILE_SIZE in both dimensions,
+                # return a single tile — no K-Means, no overlap logic.
+                if H <= TILE_SIZE and W <= TILE_SIZE:
+                    return [(0, 0)], H, W, tif_crs, tif_tf
 
                 # Fetch a thumbnail to perform K-Means quickly without OOM
                 try:
@@ -371,6 +382,9 @@ class SvamitvaDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        return self._load_tile(idx, retries=0)
+
+    def _load_tile(self, idx: int, retries: int = 0) -> Dict[str, torch.Tensor]:
         sample = self.samples[idx]
         win = sample["window"]
 
@@ -446,6 +460,15 @@ class SvamitvaDataset(Dataset):
             masks["roof_type_mask"] = np.zeros(output_shape, dtype=np.uint8)
 
         # ── Augmentation / tensor conversion ──────────────────────────────────
+        # Skip pure-background tiles in training mode — they carry no
+        # supervision signal and waste GPU cycles.  Resample to a random
+        # other tile instead (up to 3 retries to avoid infinite loops).
+        if self.mode == "train" and retries < 3:
+            any_positive = any(m.sum() > 0 for m in masks.values())
+            if not any_positive and len(self.samples) > 1:
+                new_idx = np.random.randint(0, len(self.samples))
+                return self._load_tile(new_idx, retries=retries + 1)
+
         if self.transform:
             transformed = self.transform(image=image, **masks)
             result: Dict[str, torch.Tensor] = {"image": transformed["image"]}

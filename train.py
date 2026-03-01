@@ -268,9 +268,22 @@ def train(config: TrainingConfig):
 
     # ── Scheduler ─────────────────────────────────────────────────────────────
     if config.scheduler == "cosine":
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        # Cosine annealing with optional linear warmup
+        main_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=config.num_epochs, eta_min=config.lr_min
         )
+        warmup_epochs = getattr(config, "warmup_epochs", 0)
+        if warmup_epochs > 0:
+            warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+                optimizer, start_factor=0.1, total_iters=warmup_epochs
+            )
+            scheduler = torch.optim.lr_scheduler.SequentialLR(
+                optimizer,
+                schedulers=[warmup_scheduler, main_scheduler],
+                milestones=[warmup_epochs],
+            )
+        else:
+            scheduler = main_scheduler
     elif config.scheduler == "step":
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.5)
     else:

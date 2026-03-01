@@ -36,45 +36,68 @@ def get_train_transforms(image_size: int = 512) -> A.Compose:
             A.HorizontalFlip(p=0.5),  # Horizontal flip
             A.VerticalFlip(p=0.5),  # Vertical flip
             A.Transpose(p=0.3),  # Transpose the image
-            # Random crop and resize
-            # This helps the model focus on different parts of the image
+            # Random crop and resize — keep more of the tile to preserve features
             A.RandomResizedCrop(
                 size=(image_size, image_size),
-                scale=(0.8, 1.0),  # Crop between 80-100% of original
-                ratio=(0.9, 1.1),  # Maintain roughly square aspect ratio
-                p=1.0,
+                scale=(0.85, 1.0),  # Crop between 85-100% (less aggressive)
+                ratio=(0.95, 1.05),  # Nearly square to avoid distortion
+                p=0.7,
+            ),
+            # Fallback resize when RandomResizedCrop is skipped
+            A.Resize(height=image_size, width=image_size, p=1.0),
+            # ── NOTE: ElasticTransform and Perspective REMOVED ────────────────
+            # They distort building corners and thin linear features, hurting
+            # IoU on buildings, road centrelines, and utility lines.
+            # Shift-Scale-Rotate is a safer geometric augmentation:
+            # Safe geometric augmentation (avoids edge distortion)
+            A.Affine(
+                translate_percent={"x": (-0.05, 0.05), "y": (-0.05, 0.05)},
+                scale=(0.9, 1.1),
+                rotate=(-15, 15),
+                mode=cv2.BORDER_REFLECT_101,
+                p=0.3,
             ),
             # Color augmentations
             # These help the model handle different lighting conditions
             A.OneOf(
                 [
                     A.RandomBrightnessContrast(
-                        brightness_limit=0.2, contrast_limit=0.2, p=1.0
+                        brightness_limit=0.15, contrast_limit=0.15, p=1.0
                     ),
                     A.HueSaturationValue(
-                        hue_shift_limit=15,
-                        sat_shift_limit=25,
-                        val_shift_limit=15,
+                        hue_shift_limit=10,
+                        sat_shift_limit=20,
+                        val_shift_limit=10,
                         p=1.0,
                     ),
                     A.RGBShift(
-                        r_shift_limit=15, g_shift_limit=15, b_shift_limit=15, p=1.0
+                        r_shift_limit=10, g_shift_limit=10, b_shift_limit=10, p=1.0
                     ),
                 ],
-                p=0.7,
+                p=0.6,
             ),
-            # Blur and noise
-            # These simulate different image quality conditions
+            # CLAHE — improves local contrast, critical for shadow regions
+            A.CLAHE(clip_limit=2.0, tile_grid_size=(8, 8), p=0.3),
+            # Sharpen — helps the model learn crisp edges (buildings, roads)
+            A.Sharpen(alpha=(0.1, 0.3), lightness=(0.9, 1.1), p=0.2),
+            # Blur and noise (reduced probability — too much hurts IoU)
             A.OneOf(
                 [
                     A.GaussianBlur(blur_limit=(3, 5), p=1.0),
                     A.MedianBlur(blur_limit=3, p=1.0),
-                    A.MotionBlur(blur_limit=5, p=1.0),
                 ],
-                p=0.3,
+                p=0.15,
             ),
-            # Add noise
-            A.GaussNoise(std_range=(0.01, 0.05), p=0.2),
+            # Add noise (reduced)
+            A.GaussNoise(std_range=(0.005, 0.03), p=0.15),
+            # Coarse dropout — regularisation that doesn't distort geometry
+            A.CoarseDropout(
+                num_holes_range=(1, 4),
+                hole_height_range=(16, 48),
+                hole_width_range=(16, 48),
+                fill=0,
+                p=0.2,
+            ),
             # Normalize with ImageNet statistics
             # Student note: This is standard practice for transfer learning
             A.Normalize(

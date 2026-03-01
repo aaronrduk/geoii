@@ -18,6 +18,7 @@ class IoUMetric:
     def reset(self):
         self.intersection = 0.0
         self.union        = 0.0
+        self.gt_pixels    = 0.0  # Track whether GT has any positive pixels
 
     def update(self, pred: torch.Tensor, target: torch.Tensor):
         if pred.dim() == 4 and pred.size(1) == 1:
@@ -28,9 +29,14 @@ class IoUMetric:
         union        = pred_bin.sum() + target_f.sum() - intersection
         self.intersection += intersection.item()
         self.union        += union.item()
+        self.gt_pixels    += target_f.sum().item()
 
     def compute(self) -> float:
         return self.intersection / self.union if self.union > 0 else 0.0
+
+    def has_gt(self) -> bool:
+        """Return True if any ground-truth positive pixels were seen."""
+        return self.gt_pixels > 0
 
 
 class F1Score:
@@ -131,14 +137,20 @@ class MetricTracker:
         for task in _SEG_TASKS:
             iou_val = self.iou[task].compute()
             metrics[f"{task}_iou"] = iou_val
-            iou_values.append(iou_val)
+
+            # Only include tasks that had ground-truth positive pixels
+            # in the average — otherwise empty tasks (bridge, railway often
+            # absent) would drag the average to 0 or inflate it artificially.
+            if self.iou[task].has_gt():
+                iou_values.append(iou_val)
 
             f1_result = self.f1[task].compute()
             metrics[f"{task}_f1"]        = f1_result["f1"]
             metrics[f"{task}_precision"] = f1_result["precision"]
             metrics[f"{task}_recall"]    = f1_result["recall"]
 
-        metrics["avg_iou"]       = sum(iou_values) / len(iou_values)
+        metrics["avg_iou"]       = sum(iou_values) / len(iou_values) if iou_values else 0.0
+        metrics["num_active_tasks"] = len(iou_values)
         metrics["roof_accuracy"] = self.roof_acc.compute()["overall"]
 
         return metrics

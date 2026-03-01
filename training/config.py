@@ -27,12 +27,13 @@ class TrainingConfig:
     # ── Training Hyperparameters ──────────────────────────────────────────────
     batch_size: int = 8
     num_epochs: int = 100
-    learning_rate: float = 0.001
+    learning_rate: float = 3e-4  # Slightly lower for Lovász + attention stability
     weight_decay: float = 1e-4
 
     scheduler: str = "cosine"  # 'cosine', 'step', 'reduce_on_plateau'
     lr_min: float = 1e-6
     lr_patience: int = 10
+    warmup_epochs: int = 5  # Linear warmup before cosine decay
 
     # ── Data ──────────────────────────────────────────────────────────────────
     image_size: int = 512
@@ -43,21 +44,22 @@ class TrainingConfig:
     # ── Loss Weights (original tasks) ─────────────────────────────────────────
     building_weight: float = 1.0
     roof_weight: float = 0.5
-    road_weight: float = 0.8
-    waterbody_weight: float = 0.8
+    road_weight: float = 1.0
+    waterbody_weight: float = 1.0
 
-    # ── Loss Weights (new tasks) ──────────────────────────────────────────────
-    road_centerline_weight: float = 0.7
-    waterbody_line_weight: float = 0.7
-    waterbody_point_weight: float = 0.9  # sparse → upweighted
-    utility_line_weight: float = 0.7
-    utility_poly_weight: float = 0.8
-    bridge_weight: float = 1.0  # rare → highest weight
-    railway_weight: float = 0.9
+    # ── Loss Weights (new tasks) ──────────────────────────────────────────
+    # Sparse / rare features upweighted so the model doesn't ignore them
+    road_centerline_weight: float = 1.2  # thin linear — needs boost
+    waterbody_line_weight: float = 1.2   # thin linear — needs boost
+    waterbody_point_weight: float = 1.5  # very sparse → highest weight
+    utility_line_weight: float = 1.2     # thin linear
+    utility_poly_weight: float = 1.3     # small objects
+    bridge_weight: float = 1.5           # rare → high weight
+    railway_weight: float = 1.3          # rare → high weight
 
     # ── Optimization ──────────────────────────────────────────────────────────
     optimizer: str = "adamw"
-    gradient_clip: float = 1.0
+    gradient_clip: float = 0.5  # Tighter gradient clipping for multi-task stability
     mixed_precision: bool = True
 
     # ── Evaluation ────────────────────────────────────────────────────────────
@@ -67,7 +69,7 @@ class TrainingConfig:
 
     # ── Early Stopping ────────────────────────────────────────────────────────
     early_stopping: bool = True
-    patience: int = 20
+    patience: int = 25  # More patience for multi-task convergence
 
     # ── Logging ───────────────────────────────────────────────────────────────
     log_every_n_steps: int = 50
@@ -80,7 +82,7 @@ class TrainingConfig:
     deterministic: bool = True
 
     # ── Advanced ──────────────────────────────────────────────────────────────
-    freeze_backbone_epochs: int = 0
+    freeze_backbone_epochs: int = 3  # Warm-start heads before fine-tuning backbone
     use_tta: bool = False
 
     def __post_init__(self):

@@ -116,8 +116,8 @@ class ShapefileAnnotationParser:
 
     # ── Buffer sizes (in map units, computed from pixel size in rasterize) ────
     # These are overridden per-call when we know the pixel size.
-    LINE_BUFFER_M: float = 1.5  # ~1.5 m buffer for lines
-    POINT_BUFFER_M: float = 2.0  # ~2.0 m buffer for points
+    LINE_BUFFER_M: float = 2.0  # ~2.0 m buffer for lines (wider = stronger training signal)
+    POINT_BUFFER_M: float = 3.0  # ~3.0 m buffer for points
 
     # Geometry types that need buffering
     LINE_TASKS = {
@@ -195,11 +195,11 @@ class ShapefileAnnotationParser:
 
         # Buffer lines and points so they produce visible pixel masks
         if feature_type in self.LINE_TASKS:
-            buffer_m = max(pixel_size * 3, self.LINE_BUFFER_M)
+            buffer_m = max(pixel_size * 4, self.LINE_BUFFER_M)  # wider receptive field
             gdf = gdf.copy()
             gdf["geometry"] = gdf.geometry.buffer(buffer_m)
         elif feature_type in self.POINT_TASKS:
-            buffer_m = max(pixel_size * 4, self.POINT_BUFFER_M)
+            buffer_m = max(pixel_size * 5, self.POINT_BUFFER_M)  # more visible points
             gdf = gdf.copy()
             gdf["geometry"] = gdf.geometry.buffer(buffer_m)
 

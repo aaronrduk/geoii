@@ -8,6 +8,9 @@ NaN Safety Strategy:
   - DiceLoss uses smooth + ε to handle all-zero masks
   - MultiTaskLoss stores sub-losses in nn.ModuleDict so .to(device) works
   - Zero-total guard returns a tiny 1e-7 sentinel to prevent GradScaler Inf injection
+
+Lovász hinge loss is a direct IoU surrogate — maximises the Jaccard index
+directly via its tight convex extension.
 """
 
 import torch
@@ -55,7 +58,7 @@ class BinaryFocalWithLogitsLoss(nn.Module):
     Formula: -α(1-p)^γ log(p)
     """
 
-    def __init__(self, alpha: float = 0.25, gamma: float = 2.0):
+    def __init__(self, alpha: float = 0.75, gamma: float = 2.0):
         super().__init__()
         self.alpha = alpha
         self.gamma = gamma
@@ -101,15 +104,128 @@ class FocalLoss(nn.Module):
 
 # ── Combined Segmentation Loss ────────────────────────────────────────────────
 
-class CombinedSegmentationLoss(nn.Module):
-    """Combined Dice + Binary Focal loss for binary segmentation tasks."""
+# ── Boundary Loss ──────────────────────────────────────────────────────────────
 
-    def __init__(self, dice_weight: float = 0.5, bce_weight: float = 0.5):
+class BoundaryLoss(nn.Module):
+    """
+    Penalises prediction errors near ground-truth boundaries.
+    Extracts edges from the target mask using a Laplacian-like kernel,
+    then computes BCE only on boundary pixels — sharpens predicted edges.
+    """
+
+    def __init__(self, kernel_size: int = 3):
         super().__init__()
-        self.dice_weight = dice_weight
-        self.bce_weight  = bce_weight
-        self.dice_loss   = DiceLoss()
-        self.bce_loss    = BinaryFocalWithLogitsLoss(alpha=0.25, gamma=2.0)
+        # 3×3 Laplacian kernel to detect edges
+        k = torch.tensor([[0, 1, 0],
+                          [1, -4, 1],
+                          [0, 1, 0]], dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+        self.register_buffer("edge_kernel", k)
+        self.kernel_size = kernel_size
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """pred: logits (N,H,W), target: binary float (N,H,W)."""
+        t4d = target.unsqueeze(1).float()
+        edges = F.conv2d(t4d, self.edge_kernel, padding=1).squeeze(1)
+        boundary_mask = (edges.abs() > 0.1).float()
+
+        if boundary_mask.sum() < 1:
+            return torch.zeros(1, device=pred.device, dtype=torch.float32).sum()
+
+        # BCE only on boundary pixels
+        bce = F.binary_cross_entropy_with_logits(pred, target.float(), reduction="none")
+        loss = (bce * boundary_mask).sum() / boundary_mask.sum().clamp(min=1)
+
+        if not torch.isfinite(loss):
+            return torch.zeros(1, device=pred.device, dtype=torch.float32).sum()
+        return loss
+
+
+# ── Lovász Hinge Loss ──────────────────────────────────────────────────────────
+
+class LovaszHingeLoss(nn.Module):
+    """
+    Lovász hinge loss for binary segmentation.
+
+    Direct surrogate optimisation of the IoU (Jaccard) score.
+    Operates on raw logits (not sigmoid probabilities).
+
+    Reference: Berman et al., "The Lovász-Softmax loss: A tractable surrogate
+    for the optimization of the intersection-over-union measure in neural
+    networks", CVPR 2018.
+    """
+
+    def __init__(self):
+        super().__init__()
+
+    @staticmethod
+    def _lovasz_grad(gt_sorted: torch.Tensor) -> torch.Tensor:
+        """Compute gradient of the Lovász extension w.r.t. sorted errors."""
+        p = len(gt_sorted)
+        gts = gt_sorted.sum()
+        intersection = gts - gt_sorted.float().cumsum(0)
+        union = gts + (1 - gt_sorted).float().cumsum(0)
+        jaccard = 1.0 - intersection / union.clamp(min=1e-6)
+        if p > 1:
+            jaccard[1:p] = jaccard[1:p] - jaccard[0:-1]
+        return jaccard
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            pred: logits (N, H, W) or (N, 1, H, W)
+            target: binary float (N, H, W)
+        """
+        if pred.dim() == 4 and pred.shape[1] == 1:
+            pred = pred.squeeze(1)
+
+        losses = []
+        for p, t in zip(pred, target):
+            p_flat = p.reshape(-1)
+            t_flat = t.reshape(-1).float()
+            signs = 2.0 * t_flat - 1.0
+            errors = 1.0 - p_flat * signs
+            errors_sorted, perm = torch.sort(errors, dim=0, descending=True)
+            gt_sorted = t_flat[perm]
+            grad = self._lovasz_grad(gt_sorted)
+            loss = torch.dot(F.relu(errors_sorted), grad)
+            losses.append(loss)
+
+        if not losses:
+            return torch.zeros(1, device=pred.device, dtype=torch.float32).sum()
+
+        total = sum(losses) / len(losses)
+        if not torch.isfinite(total):
+            return torch.zeros(1, device=pred.device, dtype=torch.float32).sum()
+        return total
+
+
+# ── Combined Segmentation Loss ────────────────────────────────────────────────
+
+class CombinedSegmentationLoss(nn.Module):
+    """
+    Combined Dice + Binary Focal + Lovász + Boundary loss for binary segmentation.
+
+    Lovász hinge is a direct IoU surrogate — adding it to the mix provides
+    strong gradient signal that directly pushes IoU upward, complementing
+    the region-based Dice and pixel-based Focal losses.
+    """
+
+    def __init__(
+        self,
+        dice_weight: float = 0.3,
+        bce_weight: float = 0.3,
+        lovasz_weight: float = 0.25,
+        boundary_weight: float = 0.15,
+    ):
+        super().__init__()
+        self.dice_weight     = dice_weight
+        self.bce_weight      = bce_weight
+        self.lovasz_weight   = lovasz_weight
+        self.boundary_weight = boundary_weight
+        self.dice_loss       = DiceLoss()
+        self.bce_loss        = BinaryFocalWithLogitsLoss(alpha=0.75, gamma=2.0)
+        self.lovasz_loss     = LovaszHingeLoss()
+        self.boundary_loss   = BoundaryLoss()
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         pred = torch.clamp(pred.float(), -100, 100)
@@ -122,9 +238,14 @@ class CombinedSegmentationLoss(nn.Module):
         pred_prob    = torch.sigmoid(pred_sq)
         target_float = torch.clamp(torch.nan_to_num(target.float(), nan=0.0), 0.0, 1.0)
 
-        dice  = self.dice_loss(pred_prob, target_float)
-        bce   = self.bce_loss(pred_sq, target_float)
-        total = self.dice_weight * dice + self.bce_weight * bce
+        dice     = self.dice_loss(pred_prob, target_float)
+        bce      = self.bce_loss(pred_sq, target_float)
+        lovasz   = self.lovasz_loss(pred_sq, target_float)
+        boundary = self.boundary_loss(pred_sq, target_float)
+        total    = (self.dice_weight * dice
+                    + self.bce_weight * bce
+                    + self.lovasz_weight * lovasz
+                    + self.boundary_weight * boundary)
 
         if not torch.isfinite(total):
             return torch.zeros(1, device=pred.device, dtype=torch.float32).sum()
@@ -150,15 +271,15 @@ class MultiTaskLoss(nn.Module):
         self,
         building_weight:        float = 1.0,
         roof_weight:            float = 0.5,
-        road_weight:            float = 0.8,
-        waterbody_weight:       float = 0.8,
-        road_centerline_weight: float = 0.7,
-        waterbody_line_weight:  float = 0.7,
-        waterbody_point_weight: float = 0.9,
-        utility_line_weight:    float = 0.7,
-        utility_poly_weight:    float = 0.8,
-        bridge_weight:          float = 0.5,
-        railway_weight:         float = 0.5,
+        road_weight:            float = 1.0,
+        waterbody_weight:       float = 1.0,
+        road_centerline_weight: float = 1.0,
+        waterbody_line_weight:  float = 1.0,
+        waterbody_point_weight: float = 1.2,
+        utility_line_weight:    float = 1.0,
+        utility_poly_weight:    float = 1.0,
+        bridge_weight:          float = 1.2,
+        railway_weight:         float = 1.2,
     ):
         super().__init__()
 

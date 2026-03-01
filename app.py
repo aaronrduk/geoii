@@ -65,17 +65,51 @@ TILE_SIZE = 512
 OVERLAP = 64
 
 FEATURE_META = {
-    # key             : (emoji + label,           colour RGB,         geometry_hint)
-    "building_mask": ("🏠 Buildings", (255, 60, 60), "Polygon"),
-    "road_mask": ("🛣️ Roads", (255, 220, 50), "Polygon"),
-    "road_centerline_mask": ("〰️ Road Centrelines", (255, 160, 30), "LineString"),
-    "waterbody_mask": ("💧 Waterbodies", (50, 120, 255), "Polygon"),
-    "waterbody_line_mask": ("〜 Water Lines", (80, 180, 255), "LineString"),
-    "waterbody_point_mask": ("🔵 Water Points", (150, 220, 255), "Point"),
-    "utility_line_mask": ("⚡ Utility Lines", (50, 220, 100), "LineString"),
-    "utility_poly_mask": ("🔌 Utility Areas", (100, 255, 150), "Polygon"),
-    "bridge_mask": ("🌉 Bridges", (220, 130, 50), "Polygon"),
-    "railway_mask": ("🚂 Railways", (180, 80, 255), "LineString"),
+    # key : (emoji+label, colour RGB, geometry_type, attr_prefix, sub_types)
+    # sub_types is a list of names cycled when labelling individual features.
+    # For most layers it is a single-element list; for utility_poly it lists
+    # the distinct infrastructure objects so exported attributes read
+    # "Overhead Tank 1", "Transformer 2", etc.
+    "building_mask": (
+        "🏠 Buildings", (255, 60, 60), "Polygon",
+        "Building", ["Building"],
+    ),
+    "road_mask": (
+        "🛣️ Roads", (255, 220, 50), "Polygon",
+        "Road", ["Road"],
+    ),
+    "road_centerline_mask": (
+        "〰️ Road Centrelines", (255, 160, 30), "LineString",
+        "Road Centreline", ["Road Centreline"],
+    ),
+    "waterbody_mask": (
+        "💧 Waterbodies", (50, 120, 255), "Polygon",
+        "Waterbody", ["Waterbody"],
+    ),
+    "waterbody_line_mask": (
+        "〜 Water Lines", (80, 180, 255), "LineString",
+        "Water Line", ["Canal", "Drain", "Water Line"],
+    ),
+    "waterbody_point_mask": (
+        "🔵 Water Points", (150, 220, 255), "Point",
+        "Water Point", ["Well", "Water Point"],
+    ),
+    "utility_line_mask": (
+        "⚡ Utility Lines", (50, 220, 100), "LineString",
+        "Utility Line", ["Pipeline", "Overhead Wire", "Utility Line"],
+    ),
+    "utility_poly_mask": (
+        "🔌 Utility Areas", (100, 255, 150), "Polygon",
+        "Utility Structure", ["Overhead Tank", "Transformer", "Pump House", "Substation"],
+    ),
+    "bridge_mask": (
+        "🌉 Bridges", (220, 130, 50), "Polygon",
+        "Bridge", ["Bridge"],
+    ),
+    "railway_mask": (
+        "🚂 Railways", (180, 80, 255), "LineString",
+        "Railway", ["Railway"],
+    ),
 }
 
 ROOF_TYPES = ["RCC", "Tiled", "Tin", "Others", "Unknown"]
@@ -239,22 +273,68 @@ def run_inference(image_np: np.ndarray, model: nn.Module, selected: list[str]):
 # ─────────────────────────────────────────────────────────────────────────────
 # Shapefile export — preserves CRS from input GeoTIFF
 # ─────────────────────────────────────────────────────────────────────────────
+def _convert_geometry(geom, target_type: str):
+    """
+    Convert a shapely geometry to the requested target type.
+
+    Polygon  → Polygon  : identity
+    Polygon  → LineString: extract boundary (exterior ring)
+    Polygon  → Point     : centroid
+    Multi*   → handled recursively via .geoms
+    """
+    from shapely.geometry import (
+        MultiPolygon, MultiLineString, MultiPoint,
+    )
+    from shapely.ops import linemerge
+
+    gtype = type(geom).__name__
+
+    if target_type == "Polygon":
+        # Already polygon from rasterio.features.shapes → keep as-is
+        return geom
+
+    if target_type == "LineString":
+        if gtype in ("Polygon",):
+            return geom.exterior  # returns LinearRing (valid LineString)
+        if gtype == "MultiPolygon":
+            lines = [p.exterior for p in geom.geoms]
+            merged = linemerge(lines)
+            return merged
+        return geom  # already a line
+
+    if target_type == "Point":
+        return geom.centroid
+
+    return geom
+
+
 def mask_to_shp_zip(
     mask: np.ndarray,
     threshold: float,
     feature_name: str,
     geo_meta: dict | None,
-    geom_hint: str = "Polygon",
+    geom_type: str = "Polygon",
+    attr_prefix: str = "Feature",
+    sub_types: list[str] | None = None,
 ) -> bytes | None:
     """
     Vectorise a probability mask → shapefile ZIP.
-    If geo_meta is provided, the output SHP shares the input CRS and
-    uses the correct affine transform so coordinates are in real-world units.
+
+    Geometry handling:
+        - Polygon layers  → exported as Polygon
+        - LineString layers (roads centrelines, railways, etc.) → polygon
+          boundaries are converted to LineStrings
+        - Point layers (water points) → polygon centroids become Points
+
+    Attribute naming:
+        Each feature gets a sequential, human-readable name built from
+        *sub_types* cycled over the features:
+            "Building 1", "Building 2", …
+            "Overhead Tank 1", "Transformer 2", "Pump House 3", …
     """
     try:
         import rasterio.features
         import fiona
-        from fiona.crs import CRS as FionaCRS
         from shapely.geometry import shape, mapping
     except ImportError:
         st.error("Install shapely + fiona + rasterio for SHP export.")
@@ -264,53 +344,97 @@ def mask_to_shp_zip(
     if binary.sum() == 0:
         return None
 
-    # Rasterio vectorise
+    # ── Vectorise raster mask ──────────────────────────────────────────────
     if geo_meta and geo_meta.get("transform") is not None:
         shapes_iter = rasterio.features.shapes(binary, transform=geo_meta["transform"])
     else:
         shapes_iter = rasterio.features.shapes(binary)
 
-    shapes = [(shape(geom), int(val)) for geom, val in shapes_iter if int(val) == 1]
-    shapes = [(g, v) for g, v in shapes if g.is_valid and not g.is_empty]
-    if not shapes:
+    raw_shapes = [(shape(geom), int(val)) for geom, val in shapes_iter if int(val) == 1]
+    raw_shapes = [(g, v) for g, v in raw_shapes if g.is_valid and not g.is_empty]
+    if not raw_shapes:
         return None
 
-    # Determine geometry type
-    actual_types = set(type(g).__name__ for g, _ in shapes)
+    # ── Convert geometries to the correct target type ──────────────────────
+    converted = []
+    for g, v in raw_shapes:
+        cg = _convert_geometry(g, geom_type)
+        if cg is not None and not cg.is_empty:
+            # Flatten Multi* into individual geometries
+            gname = type(cg).__name__
+            if gname.startswith("Multi"):
+                for sub in cg.geoms:
+                    if not sub.is_empty:
+                        converted.append(sub)
+            else:
+                converted.append(cg)
+    if not converted:
+        return None
 
-    # Build schema
+    # ── Choose the correct Fiona geometry type string ──────────────────────
+    fiona_geom_type = geom_type  # "Polygon", "LineString", or "Point"
+
+    # ── Build attribute schema ─────────────────────────────────────────────
+    #   name   : "Building 1", "Overhead Tank 2", …
+    #   layer  : layer-level label ("Buildings", "Utility Areas", …)
+    #   type   : sub-type from sub_types list
+    #   measure: area for polygons, length for lines, 0 for points
     schema = {
-        "geometry": (
-            "Polygon"
-            if "Polygon" in actual_types
-            else "LineString" if "LineString" in actual_types else "Point"
-        ),
-        "properties": {"feature": "str", "area": "float", "id": "int"},
+        "geometry": fiona_geom_type,
+        "properties": {
+            "id": "int",
+            "name": "str",
+            "layer": "str",
+            "type": "str",
+            "measure": "float",
+        },
     }
 
-    # CRS
+    if sub_types is None or len(sub_types) == 0:
+        sub_types = [attr_prefix]
+
+    # ── CRS ────────────────────────────────────────────────────────────────
     if geo_meta and geo_meta.get("crs"):
         try:
             crs_dict = dict(geo_meta["crs"])
         except Exception:
             crs_dict = {"init": "epsg:4326"}
     else:
-        crs_dict = {"init": "epsg:4326"}  # pixel-space fallback
+        crs_dict = {"init": "epsg:4326"}
+
+    # ── Write shapefile ────────────────────────────────────────────────────
+    # Track per-subtype counters so names read "Overhead Tank 1", "Transformer 1"
+    subtype_counters: dict[str, int] = {st_name: 0 for st_name in sub_types}
 
     with tempfile.TemporaryDirectory() as tmp:
         shp_path = os.path.join(tmp, f"{feature_name}.shp")
         with fiona.open(
             shp_path, "w", driver="ESRI Shapefile", crs=crs_dict, schema=schema
         ) as dst:
-            for i, (geom, _) in enumerate(shapes):
+            for i, geom in enumerate(converted):
                 try:
+                    # Cycle through sub-types
+                    st_name = sub_types[i % len(sub_types)]
+                    subtype_counters[st_name] += 1
+                    feat_label = f"{st_name} {subtype_counters[st_name]}"
+
+                    # Measure: area for polygons, length for lines, 0 for points
+                    if geom_type == "Polygon":
+                        measure = float(geom.area)
+                    elif geom_type == "LineString":
+                        measure = float(geom.length)
+                    else:
+                        measure = 0.0
+
                     dst.write(
                         {
                             "geometry": mapping(geom),
                             "properties": {
-                                "feature": feature_name,
-                                "area": float(geom.area),
                                 "id": i + 1,
+                                "name": feat_label,
+                                "layer": attr_prefix,
+                                "type": st_name,
+                                "measure": measure,
                             },
                         }
                     )
@@ -407,7 +531,8 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.header("🎯 Feature Layers")
     selected = []
-    for key, (label, _, _) in FEATURE_META.items():
+    for key, meta in FEATURE_META.items():
+        label = meta[0]
         if st.sidebar.checkbox(label, value=True, key=f"chk_{key}"):
             selected.append(key)
 
@@ -526,7 +651,7 @@ Supported: <strong>JPG · JPEG · PNG · TIF · TIFF</strong> (including large G
         tabs = st.tabs([FEATURE_META[k][0] for k in detected])
 
         for tab, key in zip(tabs, detected):
-            label, color, geom_hint = FEATURE_META[key]
+            label, color, geom_type, attr_prefix, sub_types = FEATURE_META[key]
             mask = preds[key]
             ov_img = overlay(image_np, mask, color, threshold=threshold)
             bin_vis = ((mask > threshold) * 255).astype(np.uint8)
@@ -552,8 +677,13 @@ Supported: <strong>JPG · JPEG · PNG · TIF · TIFF</strong> (including large G
                 all_dl_files[f"{fname}_mask.png"] = mask_png
                 all_dl_files[f"{fname}_overlay.png"] = overlay_png
 
-                # Shapefile
-                shp_bytes = mask_to_shp_zip(mask, threshold, fname, geo_meta, geom_hint)
+                # Shapefile — correct geometry type + named attributes
+                shp_bytes = mask_to_shp_zip(
+                    mask, threshold, fname, geo_meta,
+                    geom_type=geom_type,
+                    attr_prefix=attr_prefix,
+                    sub_types=sub_types,
+                )
                 if shp_bytes:
                     shp_zips[fname] = shp_bytes
                     all_dl_files[f"shapefiles/{fname}.zip"] = shp_bytes
